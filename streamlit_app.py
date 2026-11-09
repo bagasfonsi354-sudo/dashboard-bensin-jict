@@ -232,16 +232,18 @@ def load_local_mapping():
         id_col = next(c for c in df_test.columns if "id" in str(c).lower())
         box_col = next(c for c in df_test.columns if "box" in str(c).lower())
 
-        df_test["tgl_str"] = pd.to_datetime(
-            df_test[date_col], errors="coerce"
-        ).dt.strftime("%Y-%m-%d")
+        df_test["tgl_dt"] = pd.to_datetime(df_test[date_col], errors="coerce")
+        df_test["tgl_str"] = df_test["tgl_dt"].dt.strftime("%Y-%m-%d")
 
         for _, row in df_test.iterrows():
-          tgl = str(row["tgl_str"])
+          tgl = str(row["tgl_str"]).strip()
+          if tgl == "NaT" or not tgl:
+            continue
           raw_id = str(row[id_col]).strip().upper()
           box_val = float(row[box_col]) if pd.notnull(row[box_col]) else 0.0
 
           clean_id = raw_id.replace("HT", "").strip()
+
           prod_map[(tgl, raw_id)] = (
               prod_map.get((tgl, raw_id), 0.0) + box_val
           )
@@ -251,6 +253,12 @@ def load_local_mapping():
           prod_map[(tgl, clean_id)] = (
               prod_map.get((tgl, clean_id), 0.0) + box_val
           )
+
+          prod_map[raw_id] = prod_map.get(raw_id, 0.0) + box_val
+          prod_map[f"HT {clean_id}"] = (
+              prod_map.get(f"HT {clean_id}", 0.0) + box_val
+          )
+          prod_map[clean_id] = prod_map.get(clean_id, 0.0) + box_val
     except Exception as e:
       print(f"Gagal memproses file {file}: {e}")
 
@@ -305,7 +313,9 @@ def fetch_api_data(force_reload=False):
       prod_map = load_local_mapping()
       if prod_map and isinstance(data_list, list):
         for item in data_list:
-          tgl = str(item.get("tgl", "")).strip()
+          raw_tgl = str(item.get("tgl", "")).strip()
+          tgl = raw_tgl.split(" ")[0] if " " in raw_tgl else raw_tgl
+
           asset = str(item.get("asset_no", "")).strip().upper()
           clean_asset = asset.replace("HT", "").strip()
 
@@ -313,7 +323,15 @@ def fetch_api_data(force_reload=False):
               (tgl, asset),
               prod_map.get(
                   (tgl, f"HT {clean_asset}"),
-                  prod_map.get((tgl, clean_asset), 0.0),
+                  prod_map.get(
+                      (tgl, clean_asset),
+                      prod_map.get(
+                          asset,
+                          prod_map.get(
+                              f"HT {clean_asset}", prod_map.get(clean_asset, 0.0)
+                          ),
+                      ),
+                  ),
               ),
           )
           item["total_box"] = box_found
@@ -1143,44 +1161,4 @@ with tab_non_ht:
         use_container_width=True,
         hide_index=True,
     )
-  else:
-    st.info("Tidak ada data transaksi Non-Head Truck yang cocok.")
-
-with tab_inspector:
-  all_units = sorted(
-      [str(u) for u in df_filtered["asset_no"].unique() if str(u).strip()]
-  )
-  if all_units:
-    selected_unit = st.selectbox("PILIH NOMOR UNIT:", all_units)
-    unit_history = df_filtered[df_filtered["asset_no"] == selected_unit]
-    st.markdown(
-        "<p style='font-size: 12px; color: #64748B; margin-top: 4px;'>Menampilkan"
-        f" <strong>{len(unit_history)}</strong> catatan transaksi untuk unit"
-        f" <strong>{selected_unit}</strong>:</p>",
-        unsafe_allow_html=True,
-    )
-    st.dataframe(
-        unit_history[[
-            "tgl",
-            "jam",
-            "asset_no",
-            "sub_cat",
-            "volume",
-            "grade_bbm",
-            "total_box",
-        ]].rename(
-            columns={
-                "tgl": "Tanggal",
-                "jam": "Jam",
-                "asset_no": "No Unit",
-                "sub_cat": "Kategori",
-                "volume": "Volume (L)",
-                "grade_bbm": "Grade BBM",
-                "total_box": "Box",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-  else:
-    st.caption("Tidak ada unit yang tersedia untuk ditampilkan.")
+  else
