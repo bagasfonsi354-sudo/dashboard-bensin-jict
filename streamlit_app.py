@@ -211,7 +211,6 @@ def auto_login():
 
 
 def load_local_mapping():
-  """Membaca file lokal Excel (.xls, .xlsx): pencocokan fleksibel untuk data IHT Production."""
   excel_files = [
       f
       for f in os.listdir(UPLOAD_FOLDER)
@@ -1161,4 +1160,44 @@ with tab_non_ht:
         use_container_width=True,
         hide_index=True,
     )
-  else :
+  else:
+    st.info("Tidak ada data transaksi Non-Head Truck yang cocok.")
+
+with tab_inspector:
+  all_units = sorted(
+      [str(u) for u in df_filtered["asset_no"].unique() if str(u).strip()]
+  )
+  if all_units:
+    selected_unit = st.selectbox("PILIH NOMOR UNIT:", all_units)
+    unit_history = df_filtered[df_filtered["asset_no"] == selected_unit]
+    st.markdown(
+        "<p style='font-size: 12px; color: #64748B; margin-top: 4px;'>Menampilkan"
+        f" <strong>{len(unit_history)}</strong> catatan transaksi untuk unit"
+        f" <strong>{selected_unit}</strong>:</p>",
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        unit_history[[
+            "tgl",
+            "jam",
+            "asset_no",
+            "sub_cat",
+            "volume",
+            "grade_bbm",
+            "total_box",
+        ]].rename(
+            columns={
+                "tgl": "Tanggal",
+                "jam": "Jam",
+                "asset_no": "No Unit",
+                "sub_cat": "Kategori",
+                "volume": "Volume (L)",
+                "grade_bbm": "Grade BBM",
+                "total_box": "Box",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+  else:
+    st.caption("Tidak ada unit yang tersedia untuk ditampilkan.")
