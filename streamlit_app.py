@@ -211,7 +211,7 @@ def auto_login():
 
 
 def load_local_mapping():
-  """Membaca file lokal Excel (.xls, .xlsx): mendukung file IHT Production (Report Date, Trc Id, Total Box)."""
+  """Membaca file lokal Excel (.xls, .xlsx): pencocokan fleksibel untuk data IHT Production."""
   excel_files = [
       f
       for f in os.listdir(UPLOAD_FOLDER)
@@ -235,13 +235,22 @@ def load_local_mapping():
         df_test["tgl_str"] = pd.to_datetime(
             df_test[date_col], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
-        df_test["asset_code"] = "HT " + df_test[id_col].astype(str).str.strip()
 
         for _, row in df_test.iterrows():
           tgl = str(row["tgl_str"])
-          asset = str(row["asset_code"])
+          raw_id = str(row[id_col]).strip().upper()
           box_val = float(row[box_col]) if pd.notnull(row[box_col]) else 0.0
-          prod_map[(tgl, asset)] = prod_map.get((tgl, asset), 0.0) + box_val
+
+          clean_id = raw_id.replace("HT", "").strip()
+          prod_map[(tgl, raw_id)] = (
+              prod_map.get((tgl, raw_id), 0.0) + box_val
+          )
+          prod_map[(tgl, f"HT {clean_id}")] = (
+              prod_map.get((tgl, f"HT {clean_id}"), 0.0) + box_val
+          )
+          prod_map[(tgl, clean_id)] = (
+              prod_map.get((tgl, clean_id), 0.0) + box_val
+          )
     except Exception as e:
       print(f"Gagal memproses file {file}: {e}")
 
@@ -296,11 +305,18 @@ def fetch_api_data(force_reload=False):
       prod_map = load_local_mapping()
       if prod_map and isinstance(data_list, list):
         for item in data_list:
-          tgl = item.get("tgl", "")
-          asset = (item.get("asset_no") or "").strip()
-          item["total_box"] = prod_map.get(
-              (tgl, f"HT {asset}"), prod_map.get((tgl, asset), 0.0)
+          tgl = str(item.get("tgl", "")).strip()
+          asset = str(item.get("asset_no", "")).strip().upper()
+          clean_asset = asset.replace("HT", "").strip()
+
+          box_found = prod_map.get(
+              (tgl, asset),
+              prod_map.get(
+                  (tgl, f"HT {clean_asset}"),
+                  prod_map.get((tgl, clean_asset), 0.0),
+              ),
           )
+          item["total_box"] = box_found
 
       st.session_state.api_cache = data_list
       st.session_state.logged_in = True
@@ -1167,4 +1183,4 @@ with tab_inspector:
         hide_index=True,
     )
   else:
-    st.caption("No unit available.")
+    st.caption("Tidak ada unit yang tersedia untuk ditampilkan.")
