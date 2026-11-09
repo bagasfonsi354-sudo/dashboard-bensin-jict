@@ -211,7 +211,7 @@ def auto_login():
 
 
 def load_local_mapping():
-  """Membaca file lokal Excel untuk pemetaan data Box Head Truck."""
+  """Membaca file lokal Excel (.xls, .xlsx): mendukung file IHT Production (Report Date, Trc Id, Total Box)."""
   excel_files = [
       f
       for f in os.listdir(UPLOAD_FOLDER)
@@ -224,61 +224,24 @@ def load_local_mapping():
   for file in excel_files:
     filepath = os.path.join(UPLOAD_FOLDER, file)
     try:
-      xls_file = pd.ExcelFile(filepath)
-      sheet_names = xls_file.sheet_names
-      month_sheets = [
-          s
-          for s in sheet_names
-          if any(
-              m in s.upper()
-              for m in [
-                  "JANUARI",
-                  "FEBUARI",
-                  "MARET",
-                  "APRIL",
-                  "MEI",
-                  "JUNI",
-                  "JULI",
-                  "AGUSTUS",
-                  "SEPTEMBER",
-                  "OKTOBER",
-                  "NOPEMBER",
-                  "DESEMBER",
-              ]
-          )
-      ]
-      if month_sheets:
-        continue
-      else:
-        df_excel = pd.read_excel(filepath)
-        df_excel.columns = [str(c).strip().lower() for c in df_excel.columns]
-        if any("trc" in c or "box" in c for c in df_excel.columns):
-          date_col = next(
-              (c for c in df_excel.columns if "date" in c or "tgl" in c),
-              df_excel.columns[0],
-          )
-          id_col = next(
-              (c for c in df_excel.columns if "id" in c or "trc" in c),
-              df_excel.columns[1],
-          )
-          box_col = next(
-              (c for c in df_excel.columns if "box" in c), df_excel.columns[-1]
-          )
+      df_test = pd.read_excel(filepath)
+      cols_lower = [str(c).strip().lower() for c in df_test.columns]
 
-          df_excel["tgl_str"] = pd.to_datetime(
-              df_excel[date_col], errors="coerce"
-          ).dt.strftime("%Y-%m-%d")
-          df_excel["asset_code"] = (
-              "HT " + df_excel[id_col].astype(str).str.strip()
-          )
+      if any("trc id" in c or "report date" in c for c in cols_lower):
+        date_col = next(c for c in df_test.columns if "date" in str(c).lower())
+        id_col = next(c for c in df_test.columns if "id" in str(c).lower())
+        box_col = next(c for c in df_test.columns if "box" in str(c).lower())
 
-          for _, row in df_excel.iterrows():
-            tgl = str(row["tgl_str"])
-            asset = str(row["asset_code"])
-            box_val = (
-                float(row[box_col]) if pd.notnull(row[box_col]) else 0.0
-            )
-            prod_map[(tgl, asset)] = prod_map.get((tgl, asset), 0.0) + box_val
+        df_test["tgl_str"] = pd.to_datetime(
+            df_test[date_col], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+        df_test["asset_code"] = "HT " + df_test[id_col].astype(str).str.strip()
+
+        for _, row in df_test.iterrows():
+          tgl = str(row["tgl_str"])
+          asset = str(row["asset_code"])
+          box_val = float(row[box_col]) if pd.notnull(row[box_col]) else 0.0
+          prod_map[(tgl, asset)] = prod_map.get((tgl, asset), 0.0) + box_val
     except Exception as e:
       print(f"Gagal memproses file {file}: {e}")
 
@@ -336,7 +299,7 @@ def fetch_api_data(force_reload=False):
           tgl = item.get("tgl", "")
           asset = (item.get("asset_no") or "").strip()
           item["total_box"] = prod_map.get(
-              (tgl, asset), prod_map.get((tgl, f"HT {asset}"), 0.0)
+              (tgl, f"HT {asset}"), prod_map.get((tgl, asset), 0.0)
           )
 
       st.session_state.api_cache = data_list
@@ -543,7 +506,6 @@ with f_col4:
       data=csv_bytes,
       file_name=f"Laporan_UJB_JICT_{datetime.now().strftime('%Y%m%d')}.csv",
       mime="text/csv",
-      use_container_width=True,
   )
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -565,7 +527,7 @@ df_filtered["is_ht"] = df_filtered["asset_no"].apply(is_head_truck)
 df_filtered["sub_cat"] = df_filtered["asset_no"].apply(get_sub_category)
 
 # ==========================================
-# 1. KPI UTAMA & GRAFIK UMUM
+# 1. KPI UTAMA & GRAFIK UMUM + ANALISIS GLOBAL
 # ==========================================
 total_trx_all = len(df_filtered)
 total_vol_all = (
@@ -689,8 +651,50 @@ with c2:
   st.plotly_chart(fig_daily, use_container_width=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
+# Analisis Global langsung di bawah grafik umum
+analysis_global_text = (
+    "Belum ada data transaksi yang cukup untuk dianalisis dalam rentang ini."
+)
+if not df_filtered.empty:
+  df_filtered["bulan"] = df_filtered["tgl"].str.slice(0, 7)
+  month_agg = (
+      df_filtered.groupby("bulan")
+      .agg({"volume": "sum", "asset_no": "count"})
+      .reset_index()
+      .sort_values("bulan")
+  )
+  if not month_agg.empty:
+    latest = month_agg.iloc[-1]
+    analysis_global_text = (
+        "Berdasarkan data operasional terpilih, aktivitas transaksi"
+        f" terkonsentrasi pada bulan <strong>{latest['bulan']}</strong> dengan"
+        " total volume mencapai <strong>"
+        f"{latest['volume']:,.1f} Liter</strong> dari <strong>"
+        f"{latest['asset_no']}</strong> kali pengisian."
+    )
+    if len(month_agg) >= 2:
+      prev = month_agg.iloc[-2]
+      diff = latest["volume"] - prev["volume"]
+      pct = (diff / prev["volume"] * 100) if prev["volume"] > 0 else 0
+      arah = "peningkatan" if diff >= 0 else "penurunan"
+      analysis_global_text += (
+          f" Dibandingkan bulan sebelumnya ({prev['bulan']}), terjadi {arah}"
+          f" volume BBM sebesar <strong>{abs(pct):.1f}%</strong>."
+      )
+
+st.markdown(
+    f"""
+<div class="analysis-callout">
+    <div class="analysis-callout-title">📈 Evaluasi Tren Konsumsi BBM Global</div>
+    {analysis_global_text}
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
 # ==========================================
-# 2. GRAFIK HEAD TRUCK (TOP 15) & KPI
+# 2. GRAFIK HEAD TRUCK (TOP 15) & ANALISISNYA
 # ==========================================
 st.markdown(
     "<div class='section-spacing'><h3 style='font-size: 15px;'>🚛 Kategori"
@@ -856,8 +860,31 @@ with h_g4:
   st.plotly_chart(fig_ht_rate, use_container_width=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
+# Analisis Head Truck langsung di bawah grafik Head Truck
+analysis_ht_text = "Tidak ada data Head Truck yang tersedia."
+if not ht_chart_df.empty:
+  top_ht_unit = ht_chart_df.iloc[0]
+  analysis_ht_text = (
+      "Unit Head Truck dengan konsumsi BBM tertinggi adalah"
+      f" <strong>{top_ht_unit['asset_no']}</strong> dengan total volume"
+      f" <strong>{top_ht_unit['volume']:,.1f} Liter</strong>. Pastikan"
+      " pemeliharaan berkala dilakukan pada unit dengan rasio konsumsi tinggi"
+      " untuk menjaga efisiensi operasional JICT."
+  )
+
+st.markdown(
+    f"""
+<div class="analysis-callout">
+    <div class="analysis-callout-title">🚛 Analisis Efisiensi Head Truck (Top 15)</div>
+    {analysis_ht_text}
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
 # ==========================================
-# 3. GRAFIK NON-HEAD TRUCK & KPI
+# 3. GRAFIK NON-HEAD TRUCK & ANALISISNYA
 # ==========================================
 st.markdown(
     "<div class='section-spacing'><h3 style='font-size: 15px;'>⚙️ Kategori"
@@ -1005,101 +1032,31 @@ with n_g4:
   st.plotly_chart(fig_nc_vol, use_container_width=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
-# ==========================================
-# 4. ANALISIS EFISIENSI & EVALUASI
-# ==========================================
-st.markdown(
-    "<div class='section-spacing'><h3 style='font-size: 15px;'>📝 Analisis"
-    " Efisiensi &amp; Evaluasi Konsumsi BBM</h3></div>",
-    unsafe_allow_html=True,
-)
-
-analysis_global_text = (
-    "Belum ada data transaksi yang cukup untuk dianalisis dalam rentang ini."
-)
-if not df_filtered.empty:
-  df_filtered["bulan"] = df_filtered["tgl"].str.slice(0, 7)
-  month_agg = (
-      df_filtered.groupby("bulan")
-      .agg({"volume": "sum", "asset_no": "count"})
-      .reset_index()
-      .sort_values("bulan")
-  )
-  if not month_agg.empty:
-    latest = month_agg.iloc[-1]
-    analysis_global_text = (
-        "Berdasarkan data operasional terpilih, aktivitas transaksi"
-        f" terkonsentrasi pada bulan <strong>{latest['bulan']}</strong> dengan"
-        " total volume mencapai <strong>"
-        f"{latest['volume']:,.1f} Liter</strong> dari <strong>"
-        f"{latest['asset_no']}</strong> kali pengisian."
-    )
-    if len(month_agg) >= 2:
-      prev = month_agg.iloc[-2]
-      diff = latest["volume"] - prev["volume"]
-      pct = (diff / prev["volume"] * 100) if prev["volume"] > 0 else 0
-      arah = "peningkatan" if diff >= 0 else "penurunan"
-      analysis_global_text += (
-          f" Dibandingkan bulan sebelumnya ({prev['bulan']}), terjadi {arah}"
-          f" volume BBM sebesar <strong>{abs(pct):.1f}%</strong>."
-      )
-
-analysis_ht_text = "Tidak ada data Head Truck yang tersedia."
-if not ht_chart_df.empty:
-  top_ht_unit = ht_chart_df.iloc[0]
-  analysis_ht_text = (
-      "Unit Head Truck dengan konsumsi BBM tertinggi adalah"
-      f" <strong>{top_ht_unit['asset_no']}</strong> dengan total volume"
-      f" <strong>{top_ht_unit['volume']:,.1f} Liter</strong>. Pastikan"
-      " pemeliharaan berkala dilakukan pada unit dengan rasio konsumsi tinggi"
-      " untuk menjaga efisiensi operasional JICT."
-  )
-
+# Analisis Non-HT langsung di bawah grafik Non-HT
 analysis_non_ht_text = "Tidak ada data transaksi Non-Head Truck."
 if non_ht_vol > 0 and not cat_agg.empty:
   top_c = cat_agg.iloc[0]
   pct = (top_c["volume"] / non_ht_vol * 100) if non_ht_vol > 0 else 0
   analysis_non_ht_text = (
-      "Sub-kategori <strong>{top_c['sub_cat']}</strong> mendominasi pemakaian"
+      f"Sub-kategori <strong>{top_c['sub_cat']}</strong> mendominasi pemakaian"
       " BBM Non-HT dengan total konsumsi mencapai <strong>"
       f"{top_c['volume']:,.1f} Liter</strong> atau sekitar <strong>"
       f"{pct:.1f}%</strong> dari keseluruhan volume Non-Head Truck."
   )
 
-an_col1, an_col2 = st.columns(2)
-with an_col1:
-  st.markdown(
-      f"""
-    <div class="analysis-callout">
-        <div class="analysis-callout-title">📈 Evaluasi Tren Konsumsi BBM Global</div>
-        {analysis_global_text}
-    </div>
-    """,
-      unsafe_allow_html=True,
-  )
-  st.markdown(
-      f"""
-    <div class="analysis-callout">
-        <div class="analysis-callout-title">🚛 Analisis Efisiensi Head Truck (Top 15)</div>
-        {analysis_ht_text}
-    </div>
-    """,
-      unsafe_allow_html=True,
-  )
+st.markdown(
+    f"""
+<div class="analysis-callout">
+    <div class="analysis-callout-title">⚙️ Analisis Konsumsi Non-Head Truck</div>
+    {analysis_non_ht_text}
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-with an_col2:
-  st.markdown(
-      f"""
-    <div class="analysis-callout">
-        <div class="analysis-callout-title">⚙️ Analisis Konsumsi Non-Head Truck</div>
-        {analysis_non_ht_text}
-    </div>
-    """,
-      unsafe_allow_html=True,
-  )
 
 # ==========================================
-# 5. TABEL RINCIAN TRANSAKSI & INSPEKTOR
+# 4. TABEL RINCIAN TRANSAKSI & INSPEKTOR
 # ==========================================
 st.markdown(
     "<div class='section-spacing'><h3 style='font-size: 15px;'>📋 Data"
@@ -1210,4 +1167,4 @@ with tab_inspector:
         hide_index=True,
     )
   else:
-    st.caption("Tidak ada unit yang tersedia untuk ditampilkan.")
+    st.caption("No unit available.")
